@@ -11,7 +11,7 @@ const fs = require("fs");
 const config = require("./config.json");
 
 const client = new Client({
-intents: [GatewayIntentBits.Guilds]
+intents:[GatewayIntentBits.Guilds]
 });
 
 let players = fs.readFileSync("./players.txt","utf8")
@@ -21,7 +21,10 @@ let players = fs.readFileSync("./players.txt","utf8")
 
 let clicked = {};
 let page = 0;
+
 let panelMessage;
+let listMessage1;
+let listMessage2;
 
 function loadState(){
 
@@ -30,13 +33,15 @@ clicked = JSON.parse(fs.readFileSync("./state.json"));
 }
 
 players.forEach(p=>{
-if(clicked[p] === undefined) clicked[p]=false;
+if(clicked[p] === undefined) clicked[p] = false;
 });
 
 }
 
 function saveState(){
+
 fs.writeFileSync("./state.json",JSON.stringify(clicked,null,2));
+
 }
 
 function loadPanel(){
@@ -48,29 +53,40 @@ return JSON.parse(fs.readFileSync("./panel.json"));
 return {};
 }
 
-function savePanel(id){
-fs.writeFileSync("./panel.json",JSON.stringify({messageId:id},null,2));
+function savePanel(data){
+
+fs.writeFileSync("./panel.json",JSON.stringify(data,null,2));
+
 }
 
-function buildList(){
+function buildLists(){
 
 let half = Math.ceil(players.length/2);
 
 let left = players.slice(0,half);
 let right = players.slice(half);
 
-let text = "";
+let lines = [];
 
 for(let i=0;i<half;i++){
 
-let l = left[i] ? `${clicked[left[i]] ? "🔴" : "🟢"} ${left[i]}` : "";
-let r = right[i] ? `${clicked[right[i]] ? "🔴" : "🟢"} ${right[i]}` : "";
+let l = left[i] ? `${clicked[left[i]]?"🔴":"🟢"} ${left[i]}` : "";
+let r = right[i] ? `${clicked[right[i]]?"🔴":"🟢"} ${right[i]}` : "";
 
-text += `${l.padEnd(30)} ${r}\n`;
+lines.push(`${l.padEnd(30)} ${r}`);
 
 }
 
-return "```"+text+"```";
+let mid = Math.ceil(lines.length/2);
+
+let part1 = lines.slice(0,mid).join("\n");
+let part2 = lines.slice(mid).join("\n");
+
+return [
+"```"+part1+"```",
+"```"+part2+"```"
+];
+
 }
 
 function buildMenu(){
@@ -79,16 +95,20 @@ let start = page*25;
 let slice = players.slice(start,start+25);
 
 return new ActionRowBuilder().addComponents(
+
 new StringSelectMenuBuilder()
 .setCustomId("player_select")
 .setPlaceholder(`Players ${start+1}-${start+slice.length}`)
 .addOptions(
+
 slice.map(p=>({
 label:p,
 value:p,
 description: clicked[p] ? "Already selected" : "Available"
 }))
+
 )
+
 );
 
 }
@@ -117,14 +137,19 @@ new ButtonBuilder()
 
 async function updatePanel(){
 
+let lists = buildLists();
+
+await listMessage1.edit(lists[0]);
+await listMessage2.edit(lists[1]);
+
 await panelMessage.edit({
-content:buildList(),
+content:"Select player:",
 components:[buildMenu(),buildButtons()]
 });
 
 }
 
-client.once("ready", async ()=>{
+client.once("ready",async()=>{
 
 console.log(`Bot started as ${client.user.tag}`);
 
@@ -136,43 +161,63 @@ const panelData = loadPanel();
 
 try{
 
-if(panelData.messageId){
+if(panelData.panel){
 
-panelMessage = await channel.messages.fetch(panelData.messageId);
+listMessage1 = await channel.messages.fetch(panelData.list1);
+listMessage2 = await channel.messages.fetch(panelData.list2);
+panelMessage = await channel.messages.fetch(panelData.panel);
 
 await updatePanel();
 
-console.log("Existing panel loaded.");
+console.log("Existing panel loaded");
 
 }else{
 
+let lists = buildLists();
+
+listMessage1 = await channel.send(lists[0]);
+listMessage2 = await channel.send(lists[1]);
+
 panelMessage = await channel.send({
-content:buildList(),
+content:"Select player:",
 components:[buildMenu(),buildButtons()]
 });
 
-savePanel(panelMessage.id);
+savePanel({
+list1:listMessage1.id,
+list2:listMessage2.id,
+panel:panelMessage.id
+});
 
-console.log("New panel created.");
+console.log("New panel created");
 
 }
 
 }catch{
 
+let lists = buildLists();
+
+listMessage1 = await channel.send(lists[0]);
+listMessage2 = await channel.send(lists[1]);
+
 panelMessage = await channel.send({
-content:buildList(),
+content:"Select player:",
 components:[buildMenu(),buildButtons()]
 });
 
-savePanel(panelMessage.id);
+savePanel({
+list1:listMessage1.id,
+list2:listMessage2.id,
+panel:panelMessage.id
+});
 
-console.log("Panel recreated.");
+console.log("Panel recreated");
 
 }
 
 });
 
-client.on("interactionCreate", async interaction=>{
+client.on("interactionCreate",async interaction=>{
 
 if(interaction.channel.id !== config.channelId) return;
 
@@ -182,7 +227,6 @@ if(interaction.customId==="prev") page--;
 if(interaction.customId==="next") page++;
 
 await interaction.update({
-content:buildList(),
 components:[buildMenu(),buildButtons()]
 });
 
@@ -199,6 +243,7 @@ return interaction.reply({
 content:"You do not have permission.",
 ephemeral:true
 });
+
 }
 
 let player = interaction.values[0];
@@ -209,20 +254,22 @@ return interaction.reply({
 content:"This player has already been selected.",
 ephemeral:true
 });
+
 }
 
-clicked[player]=true;
+clicked[player] = true;
 
 saveState();
 
 let done = Object.values(clicked).filter(x=>x).length;
 
 await interaction.update({
-content:buildList(),
 components:[buildMenu(),buildButtons()]
 });
 
-if(done===players.length){
+await updatePanel();
+
+if(done === players.length){
 
 interaction.channel.send(
 `The list is full (${done}/${players.length}). Reset in ${config.resetMinutes} minutes.`
@@ -230,7 +277,7 @@ interaction.channel.send(
 
 setTimeout(async()=>{
 
-players.forEach(p=>clicked[p]=false);
+players.forEach(p=>clicked[p] = false);
 
 saveState();
 
